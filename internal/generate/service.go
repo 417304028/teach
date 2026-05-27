@@ -119,6 +119,16 @@ func (s Service) GenerateExercises(ctx context.Context, req Request) (Response, 
 	}
 	results, used, notice := s.retrieve(ctx, req)
 
+	knowledgeResults := results
+	if req.Filters.Track == "复习" || req.Filters.Track == "" {
+		knowledgeFilters := req.Filters
+		knowledgeFilters.Track = "新授"
+		kr, _, _ := s.retrieveWithFilters(ctx, req.Topic, knowledgeFilters, 6)
+		if len(kr) > 0 {
+			knowledgeResults = kr
+		}
+	}
+
 	var exercises []map[string]string
 	if s.Chat != nil && len(results) > 0 {
 		contentBlock := contextText(results)
@@ -138,7 +148,7 @@ func (s Service) GenerateExercises(ctx context.Context, req Request) (Response, 
 		}
 	}
 
-	doc := buildExerciseDocumentFromAI(req.Topic, req.Count, exercises, results, notice)
+	doc := buildExerciseDocumentFromAI(req.Topic, req.Count, exercises, results, knowledgeResults, notice)
 	data, err := BuildDOCX(doc)
 	if err != nil {
 		return Response{}, err
@@ -150,23 +160,28 @@ func (s Service) GenerateExercises(ctx context.Context, req Request) (Response, 
 	return Response{File: file, URL: s.fileURL(file.ID), Citations: citations(results), UsedRAG: used, Notice: notice, Preview: fmt.Sprintf("已生成 %d 道习题", req.Count), SearchHits: results}, nil
 }
 
-func buildExerciseDocumentFromAI(topic string, count int, exercises []map[string]string, results []model.SearchResult, notice string) Doc {
+func buildExerciseDocumentFromAI(topic string, count int, exercises []map[string]string, results []model.SearchResult, knowledgeResults []model.SearchResult, notice string) Doc {
 	doc := Doc{Title: topic + " 习题"}
 	if notice != "" {
 		doc.Sections = append(doc.Sections, DocSection{Heading: "说明", Lines: []string{notice}})
 	}
 
-	var problemLines, answerLines []string
+	// 知识点（从新授资料中提取）
+	if len(knowledgeResults) > 0 {
+		doc.Sections = append(doc.Sections, DocSection{Heading: "知识点", Lines: knowledgePointLines(topic, knowledgeResults)})
+	}
+
+	var problemLines, answerLinesList []string
 	if len(exercises) > 0 {
 		problemLines = formatExercisesFromAI(exercises, 1)
-		answerLines = formatAnswersFromAI(exercises, 1)
+		answerLinesList = formatAnswersFromAI(exercises, 1)
 	} else {
 		problemLines = exerciseLines(topic, count, results)
-		answerLines = answerLines(count)
+		answerLinesList = answerLines(count)
 	}
 
 	doc.Sections = append(doc.Sections, DocSection{Heading: "练习题", Lines: problemLines})
-	doc.Sections = append(doc.Sections, DocSection{Heading: "参考答案", Lines: answerLines})
+	doc.Sections = append(doc.Sections, DocSection{Heading: "参考答案", Lines: answerLinesList})
 	doc.Sections = append(doc.Sections, DocSection{Heading: "引用资料", Lines: citationLines(results)})
 	return doc
 }
@@ -238,11 +253,14 @@ func (s Service) buildOutline(ctx context.Context, topic string, results []model
 }
 
 func (s Service) retrieve(ctx context.Context, req Request) ([]model.SearchResult, bool, string) {
-	query := req.Query
+	return s.retrieveWithFilters(ctx, req.Query, req.Filters, 8)
+}
+
+func (s Service) retrieveWithFilters(ctx context.Context, query string, filters model.SearchFilters, limit int) ([]model.SearchResult, bool, string) {
 	if query == "" {
-		query = req.Topic
+		query = filters.Season + " " + filters.Edition
 	}
-	results, err := s.RAG.Search(ctx, query, req.Filters, 8)
+	results, err := s.RAG.Search(ctx, query, filters, limit)
 	if err != nil || len(results) == 0 {
 		return nil, false, "未检索到课程资料，使用通用知识生成。"
 	}

@@ -183,6 +183,43 @@ func keyPointsFromResults(topic string, results []model.SearchResult) []string {
 	return points
 }
 
+func knowledgePointLines(topic string, results []model.SearchResult) []string {
+	if len(results) == 0 {
+		return []string{"（未检索到新授课知识点）"}
+	}
+	lines := []string{}
+	seen := map[string]bool{}
+	for _, result := range results {
+		// Use the chunk text to build knowledge points.
+		// Truncate long text to avoid overly verbose output.
+		text := result.Chunk.Text
+		if len(text) > 600 {
+			text = text[:600] + "..."
+		}
+		source := result.Material.LessonTitle
+		if source == "" {
+			source = result.Material.SourcePath
+		}
+		key := source + text[:min(50, len(text))]
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		lines = append(lines, fmt.Sprintf("【%s】%s", source, text))
+	}
+	if len(lines) == 0 {
+		lines = []string{"（未检索到新授课知识点）"}
+	}
+	return lines
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func documentXML(doc Doc) string {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>`)

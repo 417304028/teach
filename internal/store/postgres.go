@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -9,26 +10,26 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v4/pgxpool"
-
 	"hermesclaw/internal/model"
 )
 
 type PostgresStore struct {
-	pool *pgxpool.Pool
+	db *sql.DB
 }
 
 func OpenPostgres(ctx context.Context, databaseURL string) (*PostgresStore, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
 		return nil, err
 	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
+	db.SetMaxOpenConns(20)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
 		return nil, err
 	}
-	return &PostgresStore{pool: pool}, nil
+	return &PostgresStore{db: db}, nil
 }
 
 func (s *PostgresStore) UpsertMaterial(material model.Material) (model.Material, bool, error) {
@@ -41,16 +42,20 @@ func (s *PostgresStore) UpsertMaterial(material model.Material) (model.Material,
 		material.CreatedAt = time.Now()
 	}
 	var existing model.Material
-	err := s.pool.QueryRow(ctx, `select id, season, edition, track, lesson_no, lesson_title, material_kind, version, source_path, stored_path, sha256, size_bytes, created_at from materials where sha256=$1`, material.SHA256).Scan(
-		&existing.ID, &existing.Season, &existing.Edition, &existing.Track, &existing.LessonNo, &existing.LessonTitle, &existing.MaterialKind, &existing.Version, &existing.SourcePath, &existing.StoredPath, &existing.SHA256, &existing.SizeBytes, &existing.CreatedAt,
+	var createdAt sql.NullTime
+	err := s.db.QueryRowContext(ctx, `select id, season, edition, track, lesson_no, lesson_title, material_kind, version, source_path, stored_path, sha256, size_bytes, created_at from materials where sha256=$1`, material.SHA256).Scan(
+		&existing.ID, &existing.Season, &existing.Edition, &existing.Track, &existing.LessonNo, &existing.LessonTitle, &existing.MaterialKind, &existing.Version, &existing.SourcePath, &existing.StoredPath, &existing.SHA256, &existing.SizeBytes, &createdAt,
 	)
 	if err == nil {
+		if createdAt.Valid {
+			existing.CreatedAt = createdAt.Time
+		}
 		return existing, false, nil
 	}
-	if err != pgx.ErrNoRows {
+	if err != sql.ErrNoRows {
 		return model.Material{}, false, err
 	}
-	_, err = s.pool.Exec(ctx, `insert into materials (id, season, edition, track, lesson_no, lesson_title, material_kind, version, source_path, stored_path, sha256, size_bytes, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+	_, err = s.db.ExecContext(ctx, `insert into materials (id, season, edition, track, lesson_no, lesson_title, material_kind, version, source_path, stored_path, sha256, size_bytes, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 		material.ID, material.Season, material.Edition, material.Track, material.LessonNo, material.LessonTitle, material.MaterialKind, material.Version, material.SourcePath, material.StoredPath, material.SHA256, material.SizeBytes, material.CreatedAt,
 	)
 	if err != nil {
@@ -68,7 +73,7 @@ func (s *PostgresStore) AddChunk(chunk model.Chunk) (model.Chunk, error) {
 	if chunk.CreatedAt.IsZero() {
 		chunk.CreatedAt = time.Now()
 	}
-	_, err := s.pool.Exec(ctx, `insert into chunks (id, material_id, text, page, token_count, embedding, created_at) values ($1,$2,$3,$4,$5,$6::vector,$7)`,
+	_, err := s.db.ExecContext(ctx, `insert into chunks (id, material_id, text, page, token_count, embedding, created_at) values ($1,$2,$3,$4,$5,$6::vector,$7)`,
 		chunk.ID, chunk.MaterialID, chunk.Text, chunk.Page, chunk.TokenCount, vectorLiteral(chunk.Embedding), chunk.CreatedAt,
 	)
 	return chunk, err
@@ -87,7 +92,7 @@ func (s *PostgresStore) SearchChunks(queryVector []float64, filters model.Search
 		m.id, m.season, m.edition, m.track, m.lesson_no, m.lesson_title, m.material_kind, m.version, m.source_path, m.stored_path, m.sha256, m.size_bytes, m.created_at,
 		1 - (c.embedding <=> $1::vector) as score
 		from chunks c join materials m on m.id=c.material_id ` + where + ` order by c.embedding <=> $1::vector limit $` + strconv.Itoa(len(args))
-	rows, err := s.pool.Query(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -95,13 +100,20 @@ func (s *PostgresStore) SearchChunks(queryVector []float64, filters model.Search
 	results := []model.SearchResult{}
 	for rows.Next() {
 		var result model.SearchResult
+		var chunkCreatedAt, matCreatedAt sql.NullTime
 		err := rows.Scan(
-			&result.Chunk.ID, &result.Chunk.MaterialID, &result.Chunk.Text, &result.Chunk.Page, &result.Chunk.TokenCount, &result.Chunk.CreatedAt,
-			&result.Material.ID, &result.Material.Season, &result.Material.Edition, &result.Material.Track, &result.Material.LessonNo, &result.Material.LessonTitle, &result.Material.MaterialKind, &result.Material.Version, &result.Material.SourcePath, &result.Material.StoredPath, &result.Material.SHA256, &result.Material.SizeBytes, &result.Material.CreatedAt,
+			&result.Chunk.ID, &result.Chunk.MaterialID, &result.Chunk.Text, &result.Chunk.Page, &result.Chunk.TokenCount, &chunkCreatedAt,
+			&result.Material.ID, &result.Material.Season, &result.Material.Edition, &result.Material.Track, &result.Material.LessonNo, &result.Material.LessonTitle, &result.Material.MaterialKind, &result.Material.Version, &result.Material.SourcePath, &result.Material.StoredPath, &result.Material.SHA256, &result.Material.SizeBytes, &matCreatedAt,
 			&result.Score,
 		)
 		if err != nil {
 			return nil, err
+		}
+		if chunkCreatedAt.Valid {
+			result.Chunk.CreatedAt = chunkCreatedAt.Time
+		}
+		if matCreatedAt.Valid {
+			result.Material.CreatedAt = matCreatedAt.Time
 		}
 		results = append(results, result)
 	}
@@ -146,7 +158,7 @@ func (s *PostgresStore) SearchMaterials(queryText string, filters model.SearchFi
 func (s *PostgresStore) ListMaterials() ([]model.Material, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	rows, err := s.pool.Query(ctx, `select id, season, edition, track, lesson_no, lesson_title, material_kind, version, source_path, stored_path, sha256, size_bytes, created_at from materials order by source_path`)
+	rows, err := s.db.QueryContext(ctx, `select id, season, edition, track, lesson_no, lesson_title, material_kind, version, source_path, stored_path, sha256, size_bytes, created_at from materials order by source_path`)
 	if err != nil {
 		return nil, err
 	}
@@ -154,8 +166,12 @@ func (s *PostgresStore) ListMaterials() ([]model.Material, error) {
 	out := []model.Material{}
 	for rows.Next() {
 		var m model.Material
-		if err := rows.Scan(&m.ID, &m.Season, &m.Edition, &m.Track, &m.LessonNo, &m.LessonTitle, &m.MaterialKind, &m.Version, &m.SourcePath, &m.StoredPath, &m.SHA256, &m.SizeBytes, &m.CreatedAt); err != nil {
+		var createdAt sql.NullTime
+		if err := rows.Scan(&m.ID, &m.Season, &m.Edition, &m.Track, &m.LessonNo, &m.LessonTitle, &m.MaterialKind, &m.Version, &m.SourcePath, &m.StoredPath, &m.SHA256, &m.SizeBytes, &createdAt); err != nil {
 			return nil, err
+		}
+		if createdAt.Valid {
+			m.CreatedAt = createdAt.Time
 		}
 		out = append(out, m)
 	}
@@ -165,7 +181,7 @@ func (s *PostgresStore) ListMaterials() ([]model.Material, error) {
 func (s *PostgresStore) ListChunks() ([]model.Chunk, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	rows, err := s.pool.Query(ctx, `select id, material_id, text, page, token_count, created_at from chunks`)
+	rows, err := s.db.QueryContext(ctx, `select id, material_id, text, page, token_count, created_at from chunks`)
 	if err != nil {
 		return nil, err
 	}
@@ -173,8 +189,12 @@ func (s *PostgresStore) ListChunks() ([]model.Chunk, error) {
 	out := []model.Chunk{}
 	for rows.Next() {
 		var c model.Chunk
-		if err := rows.Scan(&c.ID, &c.MaterialID, &c.Text, &c.Page, &c.TokenCount, &c.CreatedAt); err != nil {
+		var createdAt sql.NullTime
+		if err := rows.Scan(&c.ID, &c.MaterialID, &c.Text, &c.Page, &c.TokenCount, &createdAt); err != nil {
 			return nil, err
+		}
+		if createdAt.Valid {
+			c.CreatedAt = createdAt.Time
 		}
 		out = append(out, c)
 	}
@@ -196,7 +216,7 @@ func (s *PostgresStore) CreateJob(job model.Job) (model.Job, error) {
 	}
 	job.UpdatedAt = now
 	params, _ := json.Marshal(job.Params)
-	_, err := s.pool.Exec(ctx, `insert into generation_jobs (id, type, status, message, user_id, params, file_id, error, created_at, updated_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+	_, err := s.db.ExecContext(ctx, `insert into generation_jobs (id, type, status, message, user_id, params, file_id, error, created_at, updated_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 		job.ID, job.Type, job.Status, job.Message, job.UserID, params, job.FileID, job.Error, job.CreatedAt, job.UpdatedAt,
 	)
 	return job, err
@@ -207,7 +227,7 @@ func (s *PostgresStore) UpdateJob(job model.Job) error {
 	defer cancel()
 	job.UpdatedAt = time.Now()
 	params, _ := json.Marshal(job.Params)
-	_, err := s.pool.Exec(ctx, `update generation_jobs set status=$2, message=$3, params=$4, file_id=$5, error=$6, updated_at=$7 where id=$1`, job.ID, job.Status, job.Message, params, job.FileID, job.Error, job.UpdatedAt)
+	_, err := s.db.ExecContext(ctx, `update generation_jobs set status=$2, message=$3, params=$4, file_id=$5, error=$6, updated_at=$7 where id=$1`, job.ID, job.Status, job.Message, params, job.FileID, job.Error, job.UpdatedAt)
 	return err
 }
 
@@ -217,7 +237,7 @@ func (s *PostgresStore) ListJobs(limit int) ([]model.Job, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.pool.Query(ctx, `select id, type, status, coalesce(message,''), coalesce(user_id,''), params, coalesce(file_id,''), coalesce(error,''), created_at, updated_at from generation_jobs order by created_at desc limit $1`, limit)
+	rows, err := s.db.QueryContext(ctx, `select id, type, status, coalesce(message,''), coalesce(user_id,''), params, coalesce(file_id,''), coalesce(error,''), created_at, updated_at from generation_jobs order by created_at desc limit $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -226,8 +246,15 @@ func (s *PostgresStore) ListJobs(limit int) ([]model.Job, error) {
 	for rows.Next() {
 		var job model.Job
 		var params []byte
-		if err := rows.Scan(&job.ID, &job.Type, &job.Status, &job.Message, &job.UserID, &params, &job.FileID, &job.Error, &job.CreatedAt, &job.UpdatedAt); err != nil {
+		var createdAt, updatedAt sql.NullTime
+		if err := rows.Scan(&job.ID, &job.Type, &job.Status, &job.Message, &job.UserID, &params, &job.FileID, &job.Error, &createdAt, &updatedAt); err != nil {
 			return nil, err
+		}
+		if createdAt.Valid {
+			job.CreatedAt = createdAt.Time
+		}
+		if updatedAt.Valid {
+			job.UpdatedAt = updatedAt.Time
 		}
 		_ = json.Unmarshal(params, &job.Params)
 		out = append(out, job)
@@ -244,7 +271,7 @@ func (s *PostgresStore) AddFile(file model.FileRecord) (model.FileRecord, error)
 	if file.CreatedAt.IsZero() {
 		file.CreatedAt = time.Now()
 	}
-	_, err := s.pool.Exec(ctx, `insert into files (id, name, path, mime_type, size_bytes, expires_at, pinned, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+	_, err := s.db.ExecContext(ctx, `insert into files (id, name, path, mime_type, size_bytes, expires_at, pinned, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8)`,
 		file.ID, file.Name, file.Path, file.MimeType, file.SizeBytes, file.ExpiresAt, file.Pinned, file.CreatedAt,
 	)
 	return file, err
@@ -254,12 +281,23 @@ func (s *PostgresStore) GetFile(id string) (model.FileRecord, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	var file model.FileRecord
-	err := s.pool.QueryRow(ctx, `select id, name, path, mime_type, size_bytes, expires_at, pinned, created_at from files where id=$1`, id).Scan(&file.ID, &file.Name, &file.Path, &file.MimeType, &file.SizeBytes, &file.ExpiresAt, &file.Pinned, &file.CreatedAt)
+	var expiresAt, createdAt sql.NullTime
+	var pinned sql.NullBool
+	err := s.db.QueryRowContext(ctx, `select id, name, path, mime_type, size_bytes, expires_at, pinned, created_at from files where id=$1`, id).Scan(&file.ID, &file.Name, &file.Path, &file.MimeType, &file.SizeBytes, &expiresAt, &pinned, &createdAt)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if err == sql.ErrNoRows {
 			return model.FileRecord{}, false, nil
 		}
 		return model.FileRecord{}, false, err
+	}
+	if expiresAt.Valid {
+		file.ExpiresAt = expiresAt.Time
+	}
+	if createdAt.Valid {
+		file.CreatedAt = createdAt.Time
+	}
+	if pinned.Valid {
+		file.Pinned = pinned.Bool
 	}
 	return file, true, nil
 }
@@ -270,7 +308,7 @@ func (s *PostgresStore) ListFiles(limit int) ([]model.FileRecord, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.pool.Query(ctx, `select id, name, path, mime_type, size_bytes, expires_at, pinned, created_at from files order by created_at desc limit $1`, limit)
+	rows, err := s.db.QueryContext(ctx, `select id, name, path, mime_type, size_bytes, expires_at, pinned, created_at from files order by created_at desc limit $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -278,8 +316,19 @@ func (s *PostgresStore) ListFiles(limit int) ([]model.FileRecord, error) {
 	out := []model.FileRecord{}
 	for rows.Next() {
 		var file model.FileRecord
-		if err := rows.Scan(&file.ID, &file.Name, &file.Path, &file.MimeType, &file.SizeBytes, &file.ExpiresAt, &file.Pinned, &file.CreatedAt); err != nil {
+		var expiresAt, createdAt sql.NullTime
+		var pinned sql.NullBool
+		if err := rows.Scan(&file.ID, &file.Name, &file.Path, &file.MimeType, &file.SizeBytes, &expiresAt, &pinned, &createdAt); err != nil {
 			return nil, err
+		}
+		if expiresAt.Valid {
+			file.ExpiresAt = expiresAt.Time
+		}
+		if createdAt.Valid {
+			file.CreatedAt = createdAt.Time
+		}
+		if pinned.Valid {
+			file.Pinned = pinned.Bool
 		}
 		out = append(out, file)
 	}
@@ -289,7 +338,7 @@ func (s *PostgresStore) ListFiles(limit int) ([]model.FileRecord, error) {
 func (s *PostgresStore) DeleteExpiredFiles(now time.Time) ([]model.FileRecord, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	rows, err := s.pool.Query(ctx, `delete from files where pinned=false and expires_at is not null and expires_at < $1 returning id, name, path, mime_type, size_bytes, expires_at, pinned, created_at`, now)
+	rows, err := s.db.QueryContext(ctx, `delete from files where pinned=false and expires_at is not null and expires_at < $1 returning id, name, path, mime_type, size_bytes, expires_at, pinned, created_at`, now)
 	if err != nil {
 		return nil, err
 	}
@@ -297,8 +346,19 @@ func (s *PostgresStore) DeleteExpiredFiles(now time.Time) ([]model.FileRecord, e
 	out := []model.FileRecord{}
 	for rows.Next() {
 		var file model.FileRecord
-		if err := rows.Scan(&file.ID, &file.Name, &file.Path, &file.MimeType, &file.SizeBytes, &file.ExpiresAt, &file.Pinned, &file.CreatedAt); err != nil {
+		var expiresAt, createdAt sql.NullTime
+		var pinned sql.NullBool
+		if err := rows.Scan(&file.ID, &file.Name, &file.Path, &file.MimeType, &file.SizeBytes, &expiresAt, &pinned, &createdAt); err != nil {
 			return nil, err
+		}
+		if expiresAt.Valid {
+			file.ExpiresAt = expiresAt.Time
+		}
+		if createdAt.Valid {
+			file.CreatedAt = createdAt.Time
+		}
+		if pinned.Valid {
+			file.Pinned = pinned.Bool
 		}
 		out = append(out, file)
 	}
@@ -314,7 +374,7 @@ func (s *PostgresStore) AddMessage(message model.ChatMessage) error {
 	if message.CreatedAt.IsZero() {
 		message.CreatedAt = time.Now()
 	}
-	_, err := s.pool.Exec(ctx, `insert into chat_messages (id, user_id, channel, message, response, intent, created_at) values ($1,$2,$3,$4,$5,$6,$7)`,
+	_, err := s.db.ExecContext(ctx, `insert into chat_messages (id, user_id, channel, message, response, intent, created_at) values ($1,$2,$3,$4,$5,$6,$7)`,
 		message.ID, message.UserID, message.Channel, message.Message, message.Response, message.Intent, message.CreatedAt,
 	)
 	return err
@@ -324,7 +384,7 @@ func (s *PostgresStore) Stats() model.Stats {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var stats model.Stats
-	_ = s.pool.QueryRow(ctx, `select
+	_ = s.db.QueryRowContext(ctx, `select
 		(select count(*) from materials),
 		(select count(*) from chunks),
 		(select count(*) from generation_jobs),

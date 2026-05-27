@@ -1,57 +1,76 @@
 package log
 
 import (
-	"log/slog"
+	"log"
 	"os"
+	"strings"
 )
 
-var defaultLogger *slog.Logger
+type level int
 
-func Init(level string, jsonFormat bool) {
-	var handler slog.Handler
-	opts := &slog.HandlerOptions{
-		Level: parseLevel(level),
+const (
+	levelDebug level = iota
+	levelInfo
+	levelWarn
+	levelError
+)
+
+var (
+	logger  *log.Logger
+	minLevel level
+)
+
+func Init(levelStr string, jsonFormat bool) {
+	minLevel = parseLevel(levelStr)
+	var flags int
+	if !jsonFormat {
+		flags = log.LstdFlags
 	}
-	if jsonFormat {
-		handler = slog.NewJSONHandler(os.Stdout, opts)
-	} else {
-		handler = slog.NewTextHandler(os.Stdout, opts)
-	}
-	defaultLogger = slog.New(handler)
-	slog.SetDefault(defaultLogger)
+	logger = log.New(os.Stdout, "", flags)
 }
 
-func parseLevel(level string) slog.Level {
-	switch level {
+func parseLevel(levelStr string) level {
+	switch strings.ToLower(levelStr) {
 	case "debug":
-		return slog.LevelDebug
-	case "info":
-		return slog.LevelInfo
-	case "warn":
-		return slog.LevelWarn
+		return levelDebug
+	case "warn", "warning":
+		return levelWarn
 	case "error":
-		return slog.LevelError
+		return levelError
 	default:
-		return slog.LevelInfo
+		return levelInfo
 	}
 }
 
 func Info(msg string, args ...any) {
-	defaultLogger.Info(msg, args...)
+	if minLevel > levelInfo {
+		return
+	}
+	logger.Printf("[INFO] "+msg, args...)
 }
 
 func Error(msg string, args ...any) {
-	defaultLogger.Error(msg, args...)
+	if minLevel > levelError {
+		return
+	}
+	logger.Printf("[ERROR] "+msg, args...)
 }
 
 func Debug(msg string, args ...any) {
-	defaultLogger.Debug(msg, args...)
+	if minLevel > levelDebug {
+		return
+	}
+	logger.Printf("[DEBUG] "+msg, args...)
 }
 
 func Warn(msg string, args ...any) {
-	defaultLogger.Warn(msg, args...)
+	if minLevel > levelWarn {
+		return
+	}
+	logger.Printf("[WARN] "+msg, args...)
 }
 
-func With(args ...any) *slog.Logger {
-	return defaultLogger.With(args...)
+func Fatal(msg string, args ...any) {
+	Error(msg, args...)
+	os.Exit(1)
 }

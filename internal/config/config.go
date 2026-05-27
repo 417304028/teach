@@ -35,6 +35,9 @@ type Config struct {
 	ClawbotToken string
 
 	MaxJobInputTokens int
+
+	LogLevel string
+	LogJSON  bool
 }
 
 func Load() Config {
@@ -51,7 +54,7 @@ func Load() Config {
 		AdminPassword:           env("HERMESCLAW_ADMIN_PASSWORD", "change-me"),
 		DeepSeekAPIKey:          os.Getenv("DEEPSEEK_API_KEY"),
 		DeepSeekBaseURL:         strings.TrimRight(env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"), "/"),
-		DeepSeekModel:           env("DEEPSEEK_MODEL", "deepseek-chat"),
+		DeepSeekModel:           env("DEEPSEEK_MODEL", "deepseek-v4-flash"),
 		DashScopeAPIKey:         os.Getenv("DASHSCOPE_API_KEY"),
 		DashScopeBaseURL:        strings.TrimRight(env("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"), "/"),
 		DashScopeEmbeddingModel: env("DASHSCOPE_EMBEDDING_MODEL", "text-embedding-v4"),
@@ -60,6 +63,8 @@ func Load() Config {
 		QQAllowedIDs:            parseAllowed(os.Getenv("QQ_ALLOWED_IDS")),
 		ClawbotToken:            os.Getenv("CLAWBOT_TOKEN"),
 		MaxJobInputTokens:       envInt("HERMESCLAW_MAX_JOB_INPUT_TOKENS", 32000),
+		LogLevel:               env("HERMESCLAW_LOG_LEVEL", "info"),
+		LogJSON:                envBool("HERMESCLAW_LOG_JSON", false),
 	}
 }
 
@@ -104,6 +109,14 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func envBool(key string, fallback bool) bool {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	return raw == "true" || raw == "1" || raw == "yes"
 }
 
 func parseAllowed(raw string) map[string]bool {

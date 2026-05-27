@@ -200,9 +200,17 @@ func (s Service) ingestPDFBytes(ctx context.Context, sourcePath string, data []b
 	if len(chunks) == 0 {
 		chunks = []string{content.BuildFallbackText(material.LessonTitle, material.SourcePath, material.MaterialKind, material.Version)}
 	}
-	vectors, err := s.Embedder.Embed(ctx, chunks)
-	if err != nil {
-		return false, 0, err
+	vectors := make([][]float64, 0, len(chunks))
+	for i := 0; i < len(chunks); i += 10 {
+		end := i + 10
+		if end > len(chunks) {
+			end = len(chunks)
+		}
+		batch, err := s.Embedder.Embed(ctx, chunks[i:end])
+		if err != nil {
+			return false, i, err
+		}
+		vectors = append(vectors, batch...)
 	}
 	for i, text := range chunks {
 		_, err := s.Store.AddChunk(model.Chunk{

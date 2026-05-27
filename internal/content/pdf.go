@@ -2,51 +2,22 @@ package content
 
 import (
 	"archive/zip"
-	"bytes"
 	"io"
 	"regexp"
 	"strings"
-
-	"github.com/ledongthuc/pdf"
 )
 
 var literalStringPattern = regexp.MustCompile(`\(([^()\r\n]{2,300})\)`)
 
 func ExtractPDFTextBestEffort(data []byte) string {
-	if len(data) == 0 || !bytes.HasPrefix(data, []byte("%PDF")) {
+	if len(data) == 0 || !strings.HasPrefix(string(data), "%PDF") {
 		return ""
-	}
-	text, err := extractPDFReader(data)
-	if err == nil && strings.TrimSpace(text) != "" {
-		return text
 	}
 	return extractPDFLiteral(data)
 }
 
-func extractPDFReader(data []byte) (string, error) {
-	reader := bytes.NewReader(data)
-	r, err := pdf.NewReader(reader, int64(len(data)))
-	if err != nil {
-		return "", err
-	}
-	var out strings.Builder
-	numPages := r.NumPage()
-	maxPages := 100
-	if numPages < maxPages {
-		maxPages = numPages
-	}
-	for i := 1; i <= maxPages; i++ {
-		page := r.Page(i)
-		if page.V.IsNull() {
-			continue
-		}
-		text, err := page.GetPlainText(nil)
-		if err == nil && strings.TrimSpace(text) != "" {
-			out.WriteString(text)
-			out.WriteString("\n")
-		}
-	}
-	return out.String(), nil
+func SanitizeUTF8(s string) string {
+	return strings.ToValidUTF8(s, "")
 }
 
 func extractPDFLiteral(data []byte) string {
