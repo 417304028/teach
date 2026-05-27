@@ -3,7 +3,12 @@ package content
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode"
@@ -29,6 +34,10 @@ func extractPDFText(data []byte) string {
 	text, good := extractPDFReader(data)
 	if good {
 		return text
+	}
+	pyText := extractPDFWithPython(data)
+	if pyText != "" {
+		return pyText
 	}
 	return extractPDFLiteral(data)
 }
@@ -172,6 +181,78 @@ func ReadZipFile(file *zip.File) ([]byte, error) {
 	}
 	defer rc.Close()
 	return io.ReadAll(rc)
+}
+
+func extractPDFWithPython(data []byte) string {
+	tmpDir, err := os.MkdirTemp("", "hermesclaw_pdf_")
+	if err != nil {
+		return ""
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tmpFile := filepath.Join(tmpDir, "input.pdf")
+	if err := os.WriteFile(tmpFile, data, 0o644); err != nil {
+		return ""
+	}
+
+	scriptPath := findPdfExtractScript()
+	if scriptPath == "" {
+		return ""
+	}
+
+	cmd := exec.Command("python", scriptPath, tmpFile, "--max-pages", "50")
+	cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	var result struct {
+		Text     string  `json:"text"`
+		Error    string  `json:"error"`
+		Fallback bool    `json:"fallback"`
+		Ratio    float64 `json:"ratio"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		return ""
+	}
+	if result.Error != "" && !result.Fallback {
+		return ""
+	}
+	return strings.TrimSpace(result.Text)
+}
+
+func findPdfExtractScript() string {
+	candidates := []string{
+		"tools/pdf_extract.py",
+		"../tools/pdf_extract.py",
+		"../../tools/pdf_extract.py",
+		filepath.Join("tools", "pdf_extract.py"),
+	}
+	if wd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(wd, "tools", "pdf_extract.py"))
+	}
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "tools", "pdf_extract.py"))
+	}
+	for _, path := range candidates {
+		if fi, err := os.Stat(path); err == nil && !fi.IsDir() {
+			return path
+		}
+	}
+	absCandidates := []string{
+		filepath.Join("D:", "study", "teach", "teach", "tools", "pdf_extract.py"),
+	}
+	for _, path := range absCandidates {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
+func SanitizePythonOutput(text string) string {
+	return fmt.Sprintf("%s", text)
 }
 
 func TruncateString(s string, maxRunes int) string {

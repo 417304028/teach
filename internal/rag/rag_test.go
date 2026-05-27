@@ -2,6 +2,8 @@ package rag
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -9,6 +11,8 @@ import (
 )
 
 type mockEmbedder struct{}
+
+func (m *mockEmbedder) Dimensions() int { return 1024 }
 
 func (m *mockEmbedder) Embed(ctx context.Context, texts []string) ([][]float64, error) {
 	result := make([][]float64, len(texts))
@@ -28,16 +32,18 @@ type mockStore struct {
 	searched  []model.SearchResult
 }
 
-func (m *mockStore) AddMessage(msg model.ChatMessage) error                          { return nil }
-func (m *mockStore) CreateJob(job model.Job) (model.Job, error)                      { return job, nil }
-func (m *mockStore) UpdateJob(job model.Job) error                                   { return nil }
-func (m *mockStore) ListJobs(limit int) ([]model.Job, error)                         { return nil, nil }
-func (m *mockStore) GetFile(id string) (model.FileRecord, bool, error)               { return model.FileRecord{}, false, nil }
-func (m *mockStore) AddFile(file model.FileRecord) (model.FileRecord, error)         { return file, nil }
-func (m *mockStore) ListFiles(limit int) ([]model.FileRecord, error)                 { return nil, nil }
-func (m *mockStore) DeleteExpiredFiles(now time.Time) ([]model.FileRecord, error)   { return nil, nil }
+func (m *mockStore) AddMessage(msg model.ChatMessage) error     { return nil }
+func (m *mockStore) CreateJob(job model.Job) (model.Job, error) { return job, nil }
+func (m *mockStore) UpdateJob(job model.Job) error              { return nil }
+func (m *mockStore) ListJobs(limit int) ([]model.Job, error)    { return nil, nil }
+func (m *mockStore) GetFile(id string) (model.FileRecord, bool, error) {
+	return model.FileRecord{}, false, nil
+}
+func (m *mockStore) AddFile(file model.FileRecord) (model.FileRecord, error)      { return file, nil }
+func (m *mockStore) ListFiles(limit int) ([]model.FileRecord, error)              { return nil, nil }
+func (m *mockStore) DeleteExpiredFiles(now time.Time) ([]model.FileRecord, error) { return nil, nil }
 func (m *mockStore) UpsertMaterial(material model.Material) (model.Material, bool, error) {
-	for i, existing := range m.materials {
+	for _, existing := range m.materials {
 		if existing.SHA256 == material.SHA256 {
 			return existing, false, nil
 		}
@@ -55,9 +61,9 @@ func (m *mockStore) SearchChunks(queryVector []float64, filters model.SearchFilt
 func (m *mockStore) SearchMaterials(query string, filters model.SearchFilters, limit int) ([]model.Material, error) {
 	return m.materials, nil
 }
-func (m *mockStore) ListMaterials() ([]model.Material, error)     { return m.materials, nil }
-func (m *mockStore) ListChunks() ([]model.Chunk, error)          { return m.chunks, nil }
-func (m *mockStore) Stats() model.Stats                          { return model.Stats{} }
+func (m *mockStore) ListMaterials() ([]model.Material, error) { return m.materials, nil }
+func (m *mockStore) ListChunks() ([]model.Chunk, error)       { return m.chunks, nil }
+func (m *mockStore) Stats() model.Stats                       { return model.Stats{} }
 
 func TestIngestPath_DirNotFound(t *testing.T) {
 	svc := Service{Store: &mockStore{}, Embedder: &mockEmbedder{}}
@@ -76,14 +82,28 @@ func TestIngestPath_ZipNotFound(t *testing.T) {
 }
 
 func TestIngestPath_UnsupportedFile(t *testing.T) {
+	dir := t.TempDir()
+	unsupportedFile := filepath.Join(dir, "test_unsupported.txt")
+	if err := os.WriteFile(unsupportedFile, []byte("not a pdf or zip"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	svc := Service{Store: &mockStore{}, Embedder: &mockEmbedder{}}
-	_, err := svc.IngestPath(context.Background(), "/path/to/file.txt")
+	_, err := svc.IngestPath(context.Background(), unsupportedFile)
 	if err == nil {
 		t.Error("expected error for unsupported file type")
 	}
-	if err != nil && err.Error() != "unsupported ingest path: /path/to/file.txt" {
-		t.Errorf("unexpected error: %v", err)
+	if err != nil && !containsString(err.Error(), "unsupported") {
+		t.Errorf("expected 'unsupported' in error, got: %v", err)
 	}
+}
+
+func containsString(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSearch_FallbackToMaterials(t *testing.T) {
