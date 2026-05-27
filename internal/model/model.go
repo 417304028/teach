@@ -5,15 +5,16 @@ import "time"
 type Intent string
 
 const (
-	IntentChat      Intent = "chat"
-	IntentMindmap   Intent = "mindmap"
-	IntentPPT       Intent = "ppt"
-	IntentExercises Intent = "exercises"
-	IntentOutline   Intent = "outline"
-	IntentSearch    Intent = "search"
-	IntentUpload    Intent = "upload"
-	IntentGame      Intent = "game"
-	IntentUnknown   Intent = "unknown"
+	IntentChat        Intent = "chat"
+	IntentMindmap     Intent = "mindmap"
+	IntentPPT         Intent = "ppt"
+	IntentExercises   Intent = "exercises"
+	IntentOutline     Intent = "outline"
+	IntentSearch      Intent = "search"
+	IntentUpload      Intent = "upload"
+	IntentGame        Intent = "game"
+	IntentUnknown     Intent = "unknown"
+	IntentGenerateAll Intent = "generate_all"
 )
 
 type IntentResult struct {

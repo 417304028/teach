@@ -202,6 +202,9 @@ func flushDB(db *sql.DB, buf []pending) {
 	}
 	defer tx.Rollback()
 
+	skippedMaterials := 0
+	skippedChunks := 0
+
 	for _, p := range buf {
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO materials (id, season, edition, track, lesson_no, lesson_title, material_kind, version, source_path, stored_path, sha256, size_bytes, created_at)
@@ -212,7 +215,8 @@ func flushDB(db *sql.DB, buf []pending) {
 		)
 		if err != nil {
 			fmt.Printf("Insert material: %v\n", err)
-			return
+			skippedMaterials++
+			continue
 		}
 
 		for _, c := range p.chks {
@@ -224,9 +228,14 @@ func flushDB(db *sql.DB, buf []pending) {
 			)
 			if err != nil {
 				fmt.Printf("Insert chunk: %v\n", err)
-				return
+				skippedChunks++
+				continue
 			}
 		}
+	}
+
+	if skippedMaterials > 0 || skippedChunks > 0 {
+		fmt.Printf("flushDB: skipped %d materials, %d chunks (continuing)\n", skippedMaterials, skippedChunks)
 	}
 
 	if err := tx.Commit(); err != nil {

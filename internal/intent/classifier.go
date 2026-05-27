@@ -86,6 +86,15 @@ func ruleClassify(text string) model.IntentResult {
 		Edition:    extractEdition(text),
 		Params:     map[string]string{},
 	}
+
+	// 一键生成：检测「题目做的不好/需要生成题目+答案+知识点」
+	if containsAny(lower, "题目做的不好", "做的不好", "这部分题目", "出题", "生成题目", "需要出题", "需要生成题目") &&
+		(containsAny(lower, "不好", "不好", "差", "弱") || containsAny(lower, "生成", "出", "需要", "做")) {
+		result.Intent = model.IntentGenerateAll
+		result.Confidence = 0.95
+		return result
+	}
+
 	switch {
 	case containsAny(lower, "导图", "思维导图", "mindmap"):
 		result.Intent = model.IntentMindmap

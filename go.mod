@@ -2,4 +2,4 @@ module hermesclaw
 
 go 1.19
 
-require github.com/lib/pq v1.10.9 // indirect
+require github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728

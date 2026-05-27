@@ -42,6 +42,7 @@ type Response struct {
 	Notice     string               `json:"notice,omitempty"`
 	Preview    string               `json:"preview,omitempty"`
 	SearchHits []model.SearchResult `json:"search_hits,omitempty"`
+	PPTPDF    *Response             `json:"ppt_pdf,omitempty"`
 }
 
 type Citation struct {
