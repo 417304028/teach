@@ -3,19 +3,16 @@ package app
 import (
 	"context"
 	"testing"
-	"time"
 
-	"hermesclaw/internal/generate"
 	"hermesclaw/internal/intent"
 	"hermesclaw/internal/model"
-	"hermesclaw/internal/rag"
 )
 
 type mockStore struct {
-	messages    []model.ChatMessage
-	jobs        []model.Job
-	lastJobID   string
-	lastJobFile string
+	messages     []model.ChatMessage
+	jobs         []model.Job
+	lastJobID    string
+	lastJobFile  string
 }
 
 func (m *mockStore) AddMessage(msg model.ChatMessage) error {
@@ -40,7 +37,7 @@ func (m *mockStore) UpdateJob(job model.Job) error {
 	return nil
 }
 
-func (m *mockStore) ListJobs(limit int) ([]model.Job, error) { return m.jobs, nil }
+func (m *mockStore) ListJobs(limit int) ([]model.Job, error)  { return m.jobs, nil }
 func (m *mockStore) GetFile(id string) (model.FileRecord, bool, error) {
 	return model.FileRecord{ID: id, Name: "test.pptx", Path: "/tmp/test.pptx"}, true, nil
 }
@@ -49,33 +46,15 @@ func (m *mockStore) AddFile(file model.FileRecord) (model.FileRecord, error) {
 	m.lastJobFile = file.ID
 	return file, nil
 }
-func (m *mockStore) ListFiles(limit int) ([]model.FileRecord, error)              { return nil, nil }
+func (m *mockStore) ListFiles(limit int) ([]model.FileRecord, error) { return nil, nil }
 func (m *mockStore) DeleteExpiredFiles(now time.Time) ([]model.FileRecord, error) { return nil, nil }
-func (m *mockStore) SearchChunks(queryVector []float64, filters model.SearchFilters, limit int) ([]model.SearchResult, error) {
-	return nil, nil
-}
-func (m *mockStore) SearchMaterials(query string, filters model.SearchFilters, limit int) ([]model.Material, error) {
-	return nil, nil
-}
-func (m *mockStore) UpsertMaterial(material model.Material) (model.Material, bool, error) {
-	return material, true, nil
-}
+func (m *mockStore) SearchChunks(queryVector []float64, filters model.SearchFilters, limit int) ([]model.SearchResult, error) { return nil, nil }
+func (m *mockStore) SearchMaterials(query string, filters model.SearchFilters, limit int) ([]model.Material, error) { return nil, nil }
+func (m *mockStore) UpsertMaterial(material model.Material) (model.Material, bool, error) { return material, true, nil }
 func (m *mockStore) AddChunk(chunk model.Chunk) (model.Chunk, error) { return chunk, nil }
-func (m *mockStore) ListMaterials() ([]model.Material, error)        { return nil, nil }
-func (m *mockStore) ListChunks() ([]model.Chunk, error)              { return nil, nil }
-func (m *mockStore) Stats() model.Stats                              { return model.Stats{} }
-
-type mockRagEmbedder struct{}
-
-func (m *mockRagEmbedder) Embed(ctx context.Context, texts []string) ([][]float64, error) {
-	result := make([][]float64, len(texts))
-	for i := range texts {
-		result[i] = make([]float64, 1024)
-	}
-	return result, nil
-}
-
-func (m *mockRagEmbedder) Dimensions() int { return 1024 }
+func (m *mockStore) ListMaterials() ([]model.Material, error) { return nil, nil }
+func (m *mockStore) ListChunks() ([]model.Chunk, error) { return nil, nil }
+func (m *mockStore) Stats() model.Stats { return model.Stats{} }
 
 func TestRequestFromIntent(t *testing.T) {
 	result := model.IntentResult{
@@ -145,7 +124,6 @@ func TestFormatSearchResults_WithData(t *testing.T) {
 func TestHandleMessage_UploadIntent(t *testing.T) {
 	svc := Service{
 		Intent: intent.New(nil, nil),
-		Store:  &mockStore{},
 	}
 	resp, err := svc.HandleMessage(context.Background(), "user1", "test", "上传春季课资料")
 	if err != nil {
@@ -159,13 +137,6 @@ func TestHandleMessage_UploadIntent(t *testing.T) {
 func TestHandleMessage_SearchIntent(t *testing.T) {
 	svc := Service{
 		Intent: intent.New(nil, nil),
-		Store:  &mockStore{},
-		Generator: generate.Service{
-			RAG: rag.Service{
-				Store:    &mockStore{},
-				Embedder: &mockRagEmbedder{},
-			},
-		},
 	}
 	resp, err := svc.HandleMessage(context.Background(), "user1", "test", "搜索动能定理相关内容")
 	if err != nil {

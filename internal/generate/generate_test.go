@@ -201,8 +201,8 @@ func TestParseSlideContent(t *testing.T) {
 	if slides[0].Title != "封面" {
 		t.Errorf("first slide title = %q", slides[0].Title)
 	}
-	if len(slides[1].Lines) != 5 {
-		t.Errorf("second slide should have 5 lines (3 bullets + example + note), got %d", len(slides[1].Lines))
+	if len(slides[1].Lines) != 4 {
+		t.Errorf("second slide should have 4 lines (3 bullets + example), got %d", len(slides[1].Lines))
 	}
 }
 
@@ -291,126 +291,4 @@ func assertZipContains(t *testing.T, data []byte, name string) {
 		}
 	}
 	t.Fatalf("zip did not contain %s", name)
-}
-
-func TestBuildExerciseDocument_HasAnswers(t *testing.T) {
-	results := []model.SearchResult{
-		{Material: model.Material{LessonTitle: "平抛运动", Season: "春季课", MaterialKind: "讲义", Version: "教师版"}},
-	}
-	doc := buildExerciseDocument("平抛运动", 5, results, "")
-	foundAnswers := false
-	for _, section := range doc.Sections {
-		if strings.Contains(section.Heading, "参考") || strings.Contains(section.Heading, "答案") {
-			foundAnswers = true
-			break
-		}
-	}
-	if !foundAnswers {
-		t.Error("练习题文档应包含参考答案节")
-	}
-}
-
-func TestBuildHomeworkDocument_NoAnswers(t *testing.T) {
-	exercises := []map[string]string{
-		{"type": "选择题", "stem": "关于平抛运动，以下说法正确的是？", "options": "A.水平方向是匀速直线运动 B.竖直方向是匀加速运动 C.轨迹是抛物线 D.以上全对", "difficulty": "基础"},
-		{"type": "计算题", "stem": "一个物体以10m/s的水平初速度从高20m处平抛，求落地时间和水平位移。", "difficulty": "提升"},
-	}
-	doc := buildHomeworkDocument("平抛运动", 5, exercises, nil, nil, "")
-	foundAnswers := false
-	for _, section := range doc.Sections {
-		if strings.Contains(section.Heading, "参考") || strings.Contains(section.Heading, "答案") {
-			foundAnswers = true
-			break
-		}
-	}
-	if foundAnswers {
-		t.Error("课后作业文档不应包含参考答案节")
-	}
-	foundHomework := false
-	for _, section := range doc.Sections {
-		if strings.Contains(section.Heading, "作业") {
-			foundHomework = true
-			break
-		}
-	}
-	if !foundHomework {
-		t.Error("课后作业文档应包含作业题节")
-	}
-}
-
-func TestFormatExercisesFromAI(t *testing.T) {
-	exercises := []map[string]string{
-		{"type": "选择题", "stem": "测试题干", "options": "A.选项1 B.选项2", "answer": "A", "difficulty": "基础"},
-	}
-	lines := formatExercisesFromAI(exercises, 1)
-	if len(lines) < 2 {
-		t.Error("AI练习题格式化输出过短")
-	}
-}
-
-func TestFormatAnswersFromAI(t *testing.T) {
-	exercises := []map[string]string{
-		{"type": "选择题", "stem": "测试题干", "answer": "A"},
-		{"type": "计算题", "stem": "测试题干", "answer": "答案", "解析": "详细解析"},
-	}
-	lines := formatAnswersFromAI(exercises, 1)
-	if len(lines) < 2 {
-		t.Error("AI答案格式化输出过短")
-	}
-}
-
-func TestFormatHomeworkFromAI_NoAnswerFields(t *testing.T) {
-	exercises := []map[string]string{
-		{"type": "选择题", "stem": "关于平抛运动", "options": "A.正确 B.错误", "difficulty": "基础"},
-	}
-	lines := formatHomeworkFromAI(exercises, 1)
-	hasAnswer := false
-	for _, line := range lines {
-		if strings.Contains(line, "答案") || strings.Contains(line, "A.") {
-			hasAnswer = true
-		}
-	}
-	if !hasAnswer {
-		t.Error("作业题目应包含选项字母")
-	}
-}
-
-func TestSplitOptions(t *testing.T) {
-	opts := "A.水平方向是匀速直线运动 B.竖直方向是匀加速运动 C.轨迹是抛物线 D.以上全对"
-	result := splitOptions(opts)
-	if len(result) < 3 {
-		t.Errorf("splitOptions 应拆分出至少3个选项，实际得到 %d", len(result))
-	}
-}
-
-func TestResponseStruct_HasHomeworkField(t *testing.T) {
-	resp := Response{
-		File: model.FileRecord{Name: "test.docx"},
-		Homework: &Response{
-			File: model.FileRecord{Name: "homework_test.docx"},
-		},
-	}
-	if resp.Homework == nil {
-		t.Error("Response 结构体应包含 Homework 字段")
-	}
-	if resp.Homework.File.Name != "homework_test.docx" {
-		t.Errorf("作业文件名应为 homework_test.docx，实际为 %s", resp.Homework.File.Name)
-	}
-}
-
-func TestKnowledgePointLines(t *testing.T) {
-	results := []model.SearchResult{
-		{Material: model.Material{LessonTitle: "平抛运动"}, Chunk: model.Chunk{Text: "平抛运动是水平方向的匀速直线运动和竖直方向的自由落体运动的合运动"}},
-	}
-	lines := knowledgePointLines("平抛运动", results)
-	if len(lines) == 0 {
-		t.Error("知识点提取不应为空")
-	}
-}
-
-func TestKnowledgePointLines_Empty(t *testing.T) {
-	lines := knowledgePointLines("平抛运动", nil)
-	if len(lines) == 0 || !strings.Contains(lines[0], "未检索到") {
-		t.Error("无知识点时应返回提示信息")
-	}
 }

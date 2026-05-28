@@ -42,8 +42,7 @@ type Response struct {
 	Notice     string               `json:"notice,omitempty"`
 	Preview    string               `json:"preview,omitempty"`
 	SearchHits []model.SearchResult `json:"search_hits,omitempty"`
-	PPTPDF     *Response            `json:"ppt_pdf,omitempty"`
-	Homework   *Response            `json:"homework,omitempty"`
+	PPTPDF    *Response             `json:"ppt_pdf,omitempty"`
 }
 
 type Citation struct {
@@ -131,15 +130,13 @@ func (s Service) GenerateExercises(ctx context.Context, req Request) (Response, 
 		}
 	}
 
-	allResults := append(results, knowledgeResults...)
-	contextBlock := contextText(allResults)
-
 	var exercises []map[string]string
-	if s.Chat != nil && contextBlock != "" {
+	if s.Chat != nil && len(results) > 0 {
+		contentBlock := contextText(results)
 		aiResp, err := s.Chat.Chat(ctx, ai.ChatRequest{
 			Messages: []ai.Message{
 				{Role: "system", Content: exerciseSystemPrompt},
-				{Role: "user", Content: fmt.Sprintf("主题：%s\n题目数量：%d\n课程资料：\n%s", req.Topic, req.Count, contextBlock)},
+				{Role: "user", Content: fmt.Sprintf("主题：%s\n题目数量：%d\n课程资料：\n%s", req.Topic, req.Count, contentBlock)},
 			},
 			Temperature: 0.5,
 			MaxTokens:   2500,
@@ -152,61 +149,16 @@ func (s Service) GenerateExercises(ctx context.Context, req Request) (Response, 
 		}
 	}
 
-	now := time.Now()
-	dateDir := now.Format("2006-01-02")
-	baseDir := filepath.Join(s.DataDir, "output", dateDir)
-	os.MkdirAll(baseDir, 0o755)
-
-	cites := citations(allResults)
-	if len(cites) == 0 {
-		cites = citations(results)
-	}
-
-	doc := s.buildExerciseDocumentForAll(req.Topic, req.Count, exercises, allResults, knowledgeResults, notice)
+	doc := buildExerciseDocumentFromAI(req.Topic, req.Count, exercises, results, knowledgeResults, notice)
 	data, err := BuildDOCX(doc)
 	if err != nil {
 		return Response{}, err
 	}
-	file, err := s.writeFileTo(baseDir, req.Topic, "练习题_含答案", ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", data)
+	file, err := s.writeFile(req.Topic, "exercises", ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", data)
 	if err != nil {
 		return Response{}, err
 	}
-	resp := Response{
-		File:       file,
-		URL:        s.fileURL(file.ID),
-		Citations:  cites,
-		UsedRAG:    used,
-		Notice:     notice,
-		Preview:    fmt.Sprintf("已生成 %d 道习题（含答案）", req.Count),
-		SearchHits: allResults,
-	}
-
-	pdfData, err := convertDocxToPDF(data, filepath.Join(baseDir, "练习题_含答案.docx"))
-	if err == nil && pdfData != nil {
-		pdfFile, err := s.writeFileTo(baseDir, req.Topic, "练习题_含答案", ".pdf", "application/pdf", pdfData)
-		if err == nil {
-			resp.PPTPDF = &Response{File: pdfFile, URL: s.fileURL(pdfFile.ID), UsedRAG: used}
-		}
-	}
-
-	hwDoc := buildHomeworkDocument(req.Topic, req.Count, exercises, allResults, knowledgeResults, notice)
-	hwData, err := BuildDOCX(hwDoc)
-	if err == nil {
-		hwFile, err := s.writeFileTo(baseDir, req.Topic, "课后作业", ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", hwData)
-		if err == nil {
-			hwResp := &Response{File: hwFile, URL: s.fileURL(hwFile.ID), UsedRAG: used}
-			hwPDFData, err := convertDocxToPDF(hwData, filepath.Join(baseDir, "课后作业.docx"))
-			if err == nil && hwPDFData != nil {
-				hwPDFFile, err := s.writeFileTo(baseDir, req.Topic, "课后作业", ".pdf", "application/pdf", hwPDFData)
-				if err == nil {
-					hwResp.PPTPDF = &Response{File: hwPDFFile, URL: s.fileURL(hwPDFFile.ID), UsedRAG: used}
-				}
-			}
-			resp.Homework = hwResp
-		}
-	}
-
-	return resp, nil
+	return Response{File: file, URL: s.fileURL(file.ID), Citations: citations(results), UsedRAG: used, Notice: notice, Preview: fmt.Sprintf("已生成 %d 道习题", req.Count), SearchHits: results}, nil
 }
 
 func buildExerciseDocumentFromAI(topic string, count int, exercises []map[string]string, results []model.SearchResult, knowledgeResults []model.SearchResult, notice string) Doc {
